@@ -22,10 +22,15 @@ import Data.Array.Unboxed
 main :: IO ()
 main = do
     s <- readFile "20.txt"
-    print $ p1 $ parseBoard s
+    print $ p1 $ parseBoard s -- 568
+    print $ p2 $ parseBoard s -- 6546
 
 p1 :: Board -> Maybe Int
 p1 b = Data.List.findIndex (Set.member $ exitPoint b) $ rangeTo b
+p2 :: Board -> Maybe Int
+p2 b = p2' b (0,exitPoint b)
+p2' :: Board -> (Int,Coord) -> Maybe Int
+p2' b rix = Data.List.findIndex (Set.member rix) $ rangeToR b
     
 -- * Robot
 type Coord = (Int,Int)
@@ -36,6 +41,7 @@ data Board = Board
    , portals :: !(Map Coord Coord)
    , entryPoint :: !Coord
    , exitPoint :: !Coord
+   , outerBounds :: !(Coord,Coord)
    } deriving (Eq, Show)
 
 move :: Dir -> Coord -> Coord
@@ -51,40 +57,6 @@ oppositeDir = \case
     L -> R
     R -> L
     D -> U
-
-pathTo :: Set Coord -> Coord -> Coord -> [(Dir,Coord)]
-pathTo _ a b | a == b = []
-pathTo s a b = 
-    let neighbors = filter ((`Set.member` s) . snd) $ map (\d -> (d,move d a)) [minBound..maxBound]
-     in case find ((==b) . snd) neighbors of
-                Just p -> [p]
-                Nothing -> go (Set.fromList $ map snd neighbors) $ map pure neighbors 
-    where
-    go !seen paths = 
-        let paths' = 
-              [ (d,c'):path
-              | path <- paths
-              , let (_,c) = head path
-              , d <- [minBound..maxBound]
-              , let c' = move d c
-              , c' `Set.member` s
-              , c' `Set.notMember` seen
-              ]
-            seen' = seen <> Set.fromList (map (snd . head) paths')
-         in case find ((==b) . snd . head) paths' of
-                Just p -> reverse p
-                Nothing -> if null paths' then error $ "No path found between " ++ show a ++ " and " ++ show b ++ " in " ++ show s
-                            else go seen' paths'
-
-ranges :: Set Coord -> Coord -> [Set Coord]
-ranges s = go mempty . Set.singleton 
-    where
-    go !acc !new | null new = []
-    go !acc !new = new : go acc' new'
-        where 
-        acc' = acc <> new
-        new' = Set.intersection s $ foldMap (\c -> Set.map (`move` c) ds) new Set.\\ acc'
-    ds = Set.fromList [minBound..maxBound]
     
 rangeTo :: Board -> [Set Coord]
 rangeTo board = go mempty (Set.singleton $ entryPoint board)
@@ -96,10 +68,35 @@ rangeTo board = go mempty (Set.singleton $ entryPoint board)
         new' = foldMap (validMoves board) new 
 
 validMoves :: Board -> Coord -> Set Coord
-validMoves board ix = 
-       maybe mempty Set.singleton (Map.lookup ix $ portals board) 
-    <> Set.intersection (openSquares board) (Set.map (`move` ix) ds)
-    where ds = Set.fromList [minBound..maxBound]
+validMoves board ix = levelMoves <> portalMoves
+    where 
+    levelMoves = Set.intersection (openSquares board) (Set.map (`move` ix) ds)
+    portalMoves = maybe mempty Set.singleton (Map.lookup ix $ portals board) 
+    ds = Set.fromList [minBound..maxBound]
+    
+rangeToR :: Board -> [Set (Int,Coord)]
+rangeToR board = go mempty (Set.singleton $ (0,entryPoint board))
+    where
+    go !acc !new | null new = []
+    go !acc !new = new : go acc' (new' Set.\\ acc')
+        where 
+        acc' = acc <> new
+        new' = foldMap (uncurry $ validMovesR board) new 
+
+validMovesR :: Board -> Int -> Coord -> Set (Int,Coord)
+validMovesR board recursion ix = levelMoves <> portalMoves
+    where 
+    levelMoves = Set.map (recursion,) $ Set.intersection (openSquares board) (Set.map (`move` ix) ds)
+    portalMoves = case Map.lookup ix $ portals board of
+        Nothing -> mempty
+        Just ix' -> if isOuterPortal board ix
+            then if recursion == 0 then mempty else Set.singleton (recursion-1,ix')
+            else Set.singleton (recursion+1,ix')
+    ds = Set.fromList [minBound..maxBound]
+    
+isOuterPortal :: Board -> Coord -> Bool
+isOuterPortal board (x,y) = x `elem` [x0,x1] || y `elem` [y0,y1]
+    where ((x0,y0),(x1,y1)) = outerBounds board
     
 -- * Parsing
 parseBoard :: String -> Board
@@ -108,6 +105,7 @@ parseBoard s = Board
     , portals     = pm
     , entryPoint  = fromJust $ lookup "AA" pi
     , exitPoint   = fromJust $ lookup "ZZ" pi
+    , outerBounds = locateOuterBounds arr
     }
     where
     arr = charArray s
@@ -136,6 +134,10 @@ portalInfo arr = mapMaybe go . filter (isAlpha . snd) $ assocs arr
             let s = (if d `elem` [U,R] then id else reverse) [c,arr ! move (oppositeDir d) ix]
              in (s,move d ix)
 
+locateOuterBounds :: UArray Coord Char -> (Coord,Coord)
+locateOuterBounds arr = (minimum walls,maximum walls)
+    where walls = map fst . filter ((== '#') . snd) . assocs $ arr
+             
 -- * Utils
 iterateMaybe :: (a -> Maybe a) -> a -> [a]
 iterateMaybe f = fix $ \rec x -> x : maybe [] rec (f x)
@@ -219,3 +221,41 @@ ex1="                   A               \
 \\n  #########.###.###.#############  \
 \\n           B   J   C               \
 \\n           U   P   P               "
+
+ex2="             Z L X W       C                 \
+\\n             Z P Q B       K                 \
+\\n  ###########.#.#.#.#######.###############  \
+\\n  #...#.......#.#.......#.#.......#.#.#...#  \
+\\n  ###.#.#.#.#.#.#.#.###.#.#.#######.#.#.###  \
+\\n  #.#...#.#.#...#.#.#...#...#...#.#.......#  \
+\\n  #.###.#######.###.###.#.###.###.#.#######  \
+\\n  #...#.......#.#...#...#.............#...#  \
+\\n  #.#########.#######.#.#######.#######.###  \
+\\n  #...#.#    F       R I       Z    #.#.#.#  \
+\\n  #.###.#    D       E C       H    #.#.#.#  \
+\\n  #.#...#                           #...#.#  \
+\\n  #.###.#                           #.###.#  \
+\\n  #.#....OA                       WB..#.#..ZH\
+\\n  #.###.#                           #.#.#.#  \
+\\nCJ......#                           #.....#  \
+\\n  #######                           #######  \
+\\n  #.#....CK                         #......IC\
+\\n  #.###.#                           #.###.#  \
+\\n  #.....#                           #...#.#  \
+\\n  ###.###                           #.#.#.#  \
+\\nXF....#.#                         RF..#.#.#  \
+\\n  #####.#                           #######  \
+\\n  #......CJ                       NM..#...#  \
+\\n  ###.#.#                           #.###.#  \
+\\nRE....#.#                           #......RF\
+\\n  ###.###        X   X       L      #.#.#.#  \
+\\n  #.....#        F   Q       P      #.#.#.#  \
+\\n  ###.###########.###.#######.#########.###  \
+\\n  #.....#...#.....#.......#...#.....#.#...#  \
+\\n  #####.#.###.#######.#######.###.###.#.#.#  \
+\\n  #.......#.......#.#.#.#.#...#...#...#.#.#  \
+\\n  #####.###.#####.#.#.#.#.###.###.#.###.###  \
+\\n  #.......#.....#.#...#...............#...#  \
+\\n  #############.#.#.###.###################  \
+\\n               A O F   N                     \
+\\n               A A D   M                     "
