@@ -1,13 +1,14 @@
 {-# language LambdaCase #-} 
 module Intcode (
     Program, Computer, initComputer,
-    runToPause, PauseReason(..)
+    runToPause, PauseReason(..),
+    interactSt, interactAscii
     ) where
 
+import Control.Monad.State.Strict
 import Control.Lens
+import Data.Function
 import Data.Maybe
--- import qualified Data.Vector as V
--- import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Unboxed as V
 import qualified Data.Vector.Unboxed.Mutable as VM
 
@@ -131,7 +132,7 @@ stepComputer s = runOp s $ getOp s
 runToPause :: Computer -> PauseReason
 runToPause = either id runToPause . stepComputer 
     
--- ** Lenses
+-- * Lenses
 -- :set -ddump-splices
 -- makeLenses ''Computer
 currVector :: Lens' Computer Program
@@ -150,7 +151,7 @@ relativeBase f_aK6S (Computer x1_aK6T x2_aK6U x3_aK6V)
       (f_aK6S x2_aK6U)
 {-# INLINE relativeBase #-}
 
--- * Utils    
+-- * Utils
 writeAt :: Int -> Int -> Program -> Program
 writeAt i value initialV = V.force newV
     where
@@ -160,3 +161,37 @@ writeAt i value initialV = V.force newV
         | value == 0 = initialV
         | i == l = initialV `V.snoc` value
         | otherwise = initialV V.++ (V.replicate (i-l) 0 `V.snoc` value)
+        
+interactSt :: [Int] -> State Computer [Int]
+interactSt [] = getAllOutputs
+interactSt (i:is) = state (feedOneInput i) >>= \b -> if b then interactSt is else do
+    os <- getAllOutputs
+    error $ unlines
+        [ "Unexpected Output!" 
+        , show os
+        , "Remaining Input:"
+        , show (i:is)
+        ]
+        
+interactAscii :: String -> State Computer String
+interactAscii = fmap (map toEnum) . interactSt . map fromEnum 
+
+getAllOutputs :: State Computer [Int]
+getAllOutputs = do
+    mo <- state getOneOut
+    case mo of 
+        Nothing -> pure []
+        Just o -> fmap (o:) getAllOutputs
+        
+-- | If the next I/O is not an output, returns the original comp
+getOneOut :: Computer -> (Maybe Int, Computer)
+getOneOut c = case runToPause c of 
+    HasOutput (i,c') -> (Just i,c')
+    -- Stopped -> error "Stopped while reading output"
+    _ -> (Nothing,c)
+    
+feedOneInput :: Int -> Computer -> (Bool,Computer)
+feedOneInput i c = case runToPause c of
+    NeedsInput f -> (True,f i)
+    Stopped -> error "Stopped while feeding input"
+    _ -> (False,c)
