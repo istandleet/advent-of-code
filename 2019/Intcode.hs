@@ -174,7 +174,8 @@ interactSt (i:is) = state (feedOneInput i) >>= \b -> if b then interactSt is els
         ]
         
 interactAscii :: String -> State Computer String
-interactAscii = fmap (map toEnum) . interactSt . map fromEnum 
+interactAscii = fmap process . interactSt . map fromEnum 
+    where process = foldMap (\c -> if c < 128 && c >=0 then [toEnum c] else show c)
 
 getAllOutputs :: State Computer [Int]
 getAllOutputs = do
