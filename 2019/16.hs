@@ -1,87 +1,61 @@
-{-# language OverloadedStrings #-}
 {-# language BangPatterns #-}
-{-# language TupleSections #-}
-module Main where
+module Main (main) where
 
-import Control.Applicative
-import Control.DeepSeq
-import Control.Lens
-import Control.Parallel.Strategies
 import Data.Char
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Vector (Vector)
-import qualified Data.Vector as Vector
-import qualified Data.Vector.Unboxed as UVector
-import qualified Data.List
-import Data.Tuple (swap)
-import Data.Maybe
-import System.Environment
+import Data.Vector.Unboxed (Vector)
+import qualified Data.Vector.Unboxed as V
 
+main :: IO ()
 main = do
-    arg <- getArgs
-    print arg
-    let [n] = map read arg
     s <- filter isDigit <$> readFile "16.txt"
     let is = map digitToInt s
     putStrLn $ p1 is -- 49254779
-    -- putStrLn $ p2 100 ex -- 84462026
-    putStrLn $ p2 n is
+    -- putStrLn $ p2 ex20 -- 84462026
+    putStrLn $ p2 is
 
 p1 :: [Int] -> String
 p1 = map intToDigit . take 8 . fft
-p2 :: Int -> [Int] -> String
-p2 n ns = 
-    let offset = foldl (\acc n -> 10*acc+n) 0 $ take 7 $ ns
-     -- in map intToDigit $ slice offset 8 . fft $ concat $ replicate 10000 ns
-     in map intToDigit $ UVector.toList $ UVector.slice offset 8 . fftU n (length ns * 10000) . UVector.fromList $ concat $ replicate 10000 ns
+p2 :: [Int] -> String
+p2 ns = 
+    let offset = foldl (\acc d -> 10*acc+d) 0 $ take 7 $ ns
+     in map intToDigit $ slice offset 8 . fft $ concat $ replicate 10000 ns
  
 fft :: [Int] -> [Int]
 -- fft = fftL
--- fft = Vector.toList . fftV . Vector.fromList
-fft l = UVector.toList . fftU 100 (length l) . UVector.fromList $ l
+fft = V.toList . fftU . V.fromList 
 
-fftL :: [Int] -> [Int]
-fftL ns = iterateN 100 step ns 
+_fftL :: [Int] -> [Int]
+_fftL = iterateN 100 step 
     where step !lst = zipWith use cycles lst
-            where use !pattern !i = lastDigit $ sum $ zipWith (*) pattern lst
+            where use !pattern _ = lastDigit $ sum $ zipWith (*) pattern lst
         
-fftU :: Int -> Int -> UVector.Vector Int -> UVector.Vector Int
-fftU !n !l = iterateN n step 
+fftU :: Vector Int -> Vector Int
+fftU = iterateN 100 stepV
     where
-    step :: UVector.Vector Int -> UVector.Vector Int
-    -- step !lst = UVector.generate l $ getDigit lst
-    step !lst = UVector.fromListN l ((map (getDigit lst) [0..l-1]) `using` parListChunk 100 rseq)
+    stepV :: Vector Int -> Vector Int
+    stepV ls = V.generate l gen
+        where
+        l = V.length ls
+        halfway = ((l+1) `div` 2)+1
+        sums = V.postscanr (+) 0 ls
+        gen i | i >= halfway = lastDigit $ sums V.! i
+        gen i = lastDigit $ sumThrough $ genSumIs i l
+        
+        sumThrough :: [Int] -> Int
+        sumThrough = go 0
+            where
+            go !acc [] = acc
+            go !acc [a] = acc + (sums V.! a)
+            go !acc [a,b] = acc + (sums V.! a) - (sums V.! b)
+            go !acc [a,b,c] = acc + (sums V.! a) - (sums V.! b) - (sums V.! c)
+            go !acc (a:b:c:d:ds) = go (acc + (sums V.! a) - (sums V.! b) - (sums V.! c) + (sums V.! d)) ds
+        
+        genSumIs :: Int -> Int -> [Int]
+        genSumIs ix l = let i = succ ix in [i-1,2*i-1..l-1]
 
-getDigit :: UVector.Vector Int -> Int -> Int
--- getDigit lst i = lastDigit $ UVector.sum $ UVector.zipWith (*) (getCycle (UVector.length lst) i) lst
-getDigit lst = lastDigit . sumThrough . map (uncurry $ \ix sl -> UVector.sum $ UVector.slice ix sl lst) . slices (UVector.length lst) . succ
-
-sumThrough :: [Int] -> Int
-sumThrough = go 0
-    where
-    go !acc [] = acc
-    go !acc [n] = acc+n
-    go !acc (a:b:bs) = go (acc+a-b) bs
-
-slices :: Int -> Int -> [(Int, Int)]
-slices l i = 
-    [ (ix,min i (l-ix))
-    | ix <- [i-1,3*i-1..l-1]
-    ]
-
-
-
-cycles' :: Int -> Vector (Vector.Vector Int)
-cycles' l = Vector.fromList $ take l $ map (Vector.fromList . take l) $ cycles
-cyclesU :: Int -> Vector (UVector.Vector Int)
-cyclesU l = Vector.generate l $ getCycle l
-getCycle :: Int -> Int -> UVector.Vector Int
-getCycle l i = UVector.fromList $ take l $ tail $ cycle $ dupeList (i+1) base
-
+base :: [Int]
 base = [0, 1, 0, -1]
+cycles :: [[Int]]
 cycles = map (tail . cycle) $ map (`dupeList` base) [1..]
 
 dupeList :: Int -> [a] -> [a]
@@ -90,8 +64,51 @@ dupeList = foldMap . replicate
 lastDigit :: Int -> Int
 lastDigit n = abs n `mod` 10 
 
+iterateN :: Int -> (b -> b) -> b -> b
 iterateN n f = foldr (.) id (replicate n f)
 
+slice :: Int -> Int -> [a] -> [a]
 slice n o = take o . drop n
 
-ex = map digitToInt "03036732577212944063491565474664"
+ex = map digitToInt "12345678"
+ex10 = map digitToInt "80871224585914546619083218645595"
+ex11 = map digitToInt "19617804207202209144916044189917"
+ex12 = map digitToInt "69317163492948606335995924319873"
+ex20 = map digitToInt "03036732577212944063491565474664"
+
+{-
+drawBoards i n = go 1 move
+    where
+    move = adjacency n
+    go j !a = print j >> putStrLn (drawBoard a) >> 
+        if j == i then return () else putStrLn "" >> go (succ j) nxt
+        where nxt = a `mult` move
+
+adjacency n = array ((1,1),(n,n)) 
+    [ ((x,y),n)
+    | (y,l) <- zip [1..] $ take n cycles
+    , (x,n) <- zip [1..] $ take n l
+    ]
+    
+drawBoard :: Show a => Array (Int,Int) a  -> String
+drawBoard m = init $ unlines
+    [   Data.List.intercalate "\t" [ show (m !(x,y))
+        | x<-[x0..x1]
+        ]
+    | y <- [y0..y1]
+    ]
+    where
+    ((x0,y0),(x1,y1)) = bounds m
+
+mult :: Num a => Array (Int,Int) a -> Array (Int,Int) a -> Array (Int,Int) a
+mult a b = array ((bx0,ay0),(bx1,ay1)) 
+    [ ((bx,ay), sum [ a ! (ax0+i,ay) * b ! (bx,by0+i) 
+                    | i <- [0..ax1-ax0]
+                    ])
+    | ay <- [ay0..ay1]
+    , bx <- [bx0..bx1]
+    ]
+    where
+    ((ax0,ay0),(ax1,ay1)) = bounds a
+    ((bx0,by0),(bx1,by1)) = bounds b
+-}
