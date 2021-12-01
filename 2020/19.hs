@@ -5,6 +5,7 @@
 {-# language TransformListComp #-}
 {-# language RecordWildCards #-}
 {-# language TemplateHaskell #-}
+{-# language LambdaCase #-}
 module Main where
 
 import Control.Applicative
@@ -34,84 +35,63 @@ import qualified Data.Text as T
 import Data.Attoparsec.Text as P hiding (takeWhile)
 
 -- issue: `isLeft $ parseOnly (("a"<|>"ab")>>"b">>endOfInput) "abb"`
+hard = Input rules ["abb"]
+    where 
+    rules = Map.fromList [
+        (1,Exact 'a'),
+        (2,Exact 'b'),
+        (3,Choice [1] [1,2]),
+        -- (3,flip Choice [1] [1,2]),
+        (0,Sequence [3,2])
+        ]
 
 main :: IO ()
 main = do
-    s <- readFile "19x.txt"
+    s <- readFile "19.txt"
     input <- either fail pure $ parseOnly parseInput $ T.pack s
     print $ part1 input
     print $ part2 input
 
 part1 :: Input -> Int
 part1 input = length $ filter good $ codes input
-    where
-    rulemap = Map.fromList $ rules input
-    parser = toParser rulemap 0 <* P.endOfInput
-    good = isRight . parseOnly parser
+    where good = any null . apply (rules input) 0 . pure . T.unpack
 
 part2 :: Input -> Int
-part2 input = length $ filter good $ codes input
-    where
-    -- 8: 42 | 42 8
-    -- 11: 42 31 | 42 11 31
-    hardcode = Map.insert 8 (Choice [42] [42,8]) . Map.insert 11 (Choice [42,31] [42,11,31])
-    rulemap = hardcode $ Map.fromList $ rules input
-    parser = toParser rulemap 0 <* P.endOfInput
-    good = isRight . parseOnly parser
+part2 (Input a b) = part1 (Input (hardcode a) b)
 
-part2' input = filter good $ codes input
-    where
-    -- 8: 42 | 42 8
-    -- 11: 42 31 | 42 11 31
-    hardcode = Map.insert 8 (Choice [42] [42,8]) . Map.insert 11 (Choice [42,31] [42,11,31])
-    rulemap = hardcode $ Map.fromList $ rules input
-    parser = toParser rulemap 0 <* P.endOfInput
-    good = isRight . parseOnly parser
+-- 8: 42 | 42 8
+-- 11: 42 31 | 42 11 31
+hardcode :: Map Int Rule -> Map Int Rule
+hardcode = Map.insert 8 (Choice [42] [42,8]) . Map.insert 11 (Choice [42,31] [42,11,31])
 
 data Input = Input
-   { rules :: [(Int, Rule)]
+   { rules :: Map Int Rule
    , codes :: [Text]
    } deriving (Show, Eq)
 
 data Rule =
-     Exact Text
+     Exact Char
    | Sequence [Int]
    | Choice [Int] [Int]
    deriving (Show, Eq)
 
-toParser :: Map Int Rule -> Int -> P.Parser ()
-toParser m = go
-    where 
-    go i = case m Map.! i of 
-        Exact str -> () <$ P.string str 
-        Sequence is -> fromSeq is
-        Choice is is' -> fromSeq is <|> fromSeq is'
-
-    fromSeq = mapM_ go
-
-toParserTrace :: Map Int Rule -> Int -> P.Parser [Int]
-toParserTrace m = go
-    where 
-    go i = (<?> show i) $ fmap (i:) $ case m Map.! i of 
-        Exact str -> [] <$ P.string str 
-        Sequence is -> fromSeq is
-        Choice is is' -> fromSeq is <|> fromSeq is'
-
-    fromSeq = fmap concat . mapM go
-
--- simplifyRules :: Map Int Rule -> Map Int Rule
-simplifyRules m = filter (isKnown m) (Map.keys m)
+apply :: Map Int Rule -> Int -> [String] -> [String]
+apply rules int = case rules Map.! int of 
+    Exact c -> mapMaybe $ \case 
+                            (c':cs) | c' == c -> Just cs
+                            _ -> Nothing
+    Sequence is -> go is
+    Choice is js -> go is <> go js
     where
-    isKnown m i = case m Map.! i of
-        Exact _ -> True
-        Sequence is -> all noncyclic is
-        Choice a b -> all noncyclic a && all noncyclic b
-        where noncyclic i' = i /= i' && isKnown m i'
+    go :: [Int] -> [String] -> [String]
+    go [] ss = ss
+    go _ [] = []
+    go (i:is) ss = go is $ apply rules i ss
 
 -- Parsing
 parseInput :: P.Parser Input
 parseInput = do
-    rules <- parseRule `sepBy1` P.endOfLine
+    rules <- fmap Map.fromList $ parseRule `sepBy1` P.endOfLine
     P.endOfLine
     P.endOfLine
     codes <- P.takeWhile1 (\c -> not $ c == '\r' || c == '\n') `sepBy1` P.endOfLine
@@ -128,7 +108,7 @@ parseRule = do
     where
     parseLit = do
         char '"'
-        str <- P.takeWhile1 (\c -> c /= '"')
+        str <- P.anyChar
         char '"'
         return $ Exact str
     parseChoice = do
